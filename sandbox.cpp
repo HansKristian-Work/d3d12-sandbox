@@ -45,12 +45,22 @@ struct Context
 	ComPtr<ID3D12Fence> fence;
 	uint64_t timeline = 0;
 
+	uint64_t timestamp_frequency = 0;
+
+	double gfx_accum_time_buffer[64] = {};
+	double cs_accum_time_buffer[64] = {};
+
 	struct
 	{
 		ComPtr<ID3D12Resource> backbuffer;
 		D3D12_CPU_DESCRIPTOR_HANDLE rtv_handle = {};
 		ComPtr<ID3D12CommandAllocator> allocator;
 		uint64_t wait_value = 0;
+
+		ComPtr<ID3D12QueryHeap> query_heap;
+		ComPtr<ID3D12Resource> query_readback;
+
+		std::vector<const char *> tags;
 	} frames[2];
 
 	bool init();
@@ -73,6 +83,32 @@ void Context::end_region()
 {
 	if (pixEndEventOnCommandList)
 		pixEndEventOnCommandList(list.Get());
+}
+
+static ComPtr<ID3D12Resource> create_readback_buffer(Context &ctx, size_t size)
+{
+	D3D12_RESOURCE_DESC desc = {};
+	desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	desc.Width = size;
+	desc.Height = 1;
+	desc.DepthOrArraySize = 1;
+	desc.Format = DXGI_FORMAT_UNKNOWN;
+	desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	desc.SampleDesc.Count = 1;
+	desc.MipLevels = 1;
+
+	ComPtr<ID3D12Resource> readback;
+	D3D12_HEAP_PROPERTIES heap_props = {};
+	heap_props.Type = D3D12_HEAP_TYPE_READBACK;
+
+	if (FAILED(ctx.device->CreateCommittedResource(&heap_props, D3D12_HEAP_FLAG_CREATE_NOT_ZEROED, &desc,
+		D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback))))
+	{
+		fprintf(stderr, "Failed to create buffer.\n");
+		return {};
+	}
+
+	return readback;
 }
 
 bool Context::init()
@@ -127,6 +163,8 @@ bool Context::init()
 		fprintf(stderr, "Failed to create command queue, hr #%x.\n", unsigned(hr));
 		return false;
 	}
+
+	queue->GetTimestampFrequency(&timestamp_frequency);
 
 	if (FAILED(hr = device->CreateCommandList1(
 		0, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_LIST_FLAG_NONE, IID_PPV_ARGS(&list))))
@@ -194,6 +232,20 @@ bool Context::init()
 			fprintf(stderr, "Failed to create command allocator.\n");
 			return false;
 		}
+
+		D3D12_QUERY_HEAP_DESC query_desc = {};
+		query_desc.Count = 256;
+		query_desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+
+		if (FAILED(device->CreateQueryHeap(&query_desc, IID_PPV_ARGS(&frames[i].query_heap))))
+		{
+			fprintf(stderr, "Failed to create query heap.\n");
+			return false;
+		}
+
+		frames[i].query_readback = create_readback_buffer(*this, query_desc.Count * sizeof(uint64_t));
+		if (!frames[i].query_readback)
+			return false;
 	}
 
 	return true;
@@ -488,6 +540,8 @@ static void execute_command_buffer(Context &ctx, unsigned index, const Pipeline 
 
 	ctx.begin_region(params.tag);
 
+	ctx.list->EndQuery(frame.query_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3 * frame.tags.size() + 0);
+
 	if (params.gfx_arguments)
 	{
 		for (uint32_t i = 0; i < params.iterations; i++)
@@ -525,6 +579,8 @@ static void execute_command_buffer(Context &ctx, unsigned index, const Pipeline 
 	if (params.cs_arguments)
 		indirect_roundtrip(ctx, params.cs_arguments);
 
+	ctx.list->EndQuery(frame.query_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3 * frame.tags.size() + 1);
+
 	ctx.list->SetComputeRootSignature(cs_pipeline.rootsig.Get());
 	ctx.list->SetPipelineState(cs_pipeline.pso.Get());
 
@@ -560,6 +616,9 @@ static void execute_command_buffer(Context &ctx, unsigned index, const Pipeline 
 	}
 
 	ctx.end_region();
+
+	ctx.list->EndQuery(frame.query_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 3 * frame.tags.size() + 2);
+	frame.tags.push_back(params.tag);
 
 	std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
 	ctx.list->ResourceBarrier(1, &barrier);
@@ -636,13 +695,37 @@ static void render_test(Context &ctx)
 		auto &frame = ctx.frames[backbuffer];
 		ctx.fence->SetEventOnCompletion(frame.wait_value, nullptr);
 
+		if (frame.wait_value > 1) // After GPU is sufficiently "warmed" up.
+		{
+			printf("=== Frame ===\n");
+			uint64_t *ptr;
+			frame.query_readback->Map(0, NULL, (void **)&ptr);
+			for (size_t i = 0, n = frame.tags.size(); i < n; i++)
+			{
+				printf("  %s:\n", frame.tags[i]);
+
+				uint64_t gfx_ticks = ptr[3 * i + 1] - ptr[3 * i + 0];
+				uint64_t cs_ticks = ptr[3 * i + 2] - ptr[3 * i + 1];
+				double gfx_time = double(gfx_ticks) / double(ctx.timestamp_frequency);
+				double cs_time = double(cs_ticks) / double(ctx.timestamp_frequency);
+
+				ctx.gfx_accum_time_buffer[i] = 0.99 * ctx.gfx_accum_time_buffer[i] + 0.01 * gfx_time;
+				ctx.cs_accum_time_buffer[i] = 0.99 * ctx.cs_accum_time_buffer[i] + 0.01 * cs_time;
+
+				printf("   Avg Graphics: %.3f ms\n", 1e3 * ctx.gfx_accum_time_buffer[i]);
+				printf("   Avg Compute:  %.3f ms\n", 1e3 * ctx.cs_accum_time_buffer[i]);
+			}
+			frame.query_readback->Unmap(0, NULL);
+			printf("=========\n");
+		}
+
 		frame.allocator->Reset();
 
-		constexpr bool DirectPath = false;
-		constexpr bool IndirectPath = false;
+		constexpr bool DirectPath = true;
+		constexpr bool IndirectPath = true;
 		constexpr bool IndirectCountPath = true;
 		constexpr bool EmptyDispatch = true;
-		constexpr bool Roundtrip = true;
+		constexpr bool Roundtrip = false;
 
 		Params params = {};
 		params.max_commands = 256;
@@ -650,6 +733,8 @@ static void render_test(Context &ctx)
 		params.cs_cmds = cs_cmd.data();
 		params.ibv = ibv;
 		params.roundtrip = Roundtrip;
+
+		frame.tags.clear();
 
 		// Non-indirect
 		if (DirectPath)
@@ -729,6 +814,12 @@ static void render_test(Context &ctx)
 			params.tag = "Indirect - 16 iterations - 256 / 256 indirect count";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 		}
+
+		ctx.list->Reset(frame.allocator.Get(), nullptr);
+		ctx.list->ResolveQueryData(frame.query_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 256, frame.query_readback.Get(), 0);
+		ctx.list->Close();
+		ID3D12CommandList *list = ctx.list.Get();
+		ctx.queue->ExecuteCommandLists(1, &list);
 
 		ctx.queue->Signal(ctx.fence.Get(), ++ctx.timeline);
 		frame.wait_value = ctx.timeline;
