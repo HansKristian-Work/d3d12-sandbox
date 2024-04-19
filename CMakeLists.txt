@@ -34,5 +34,7 @@ target_link_libraries(sandbox PRIVATE SDL3-static)
 
 if (WIN32)
     target_link_libraries(sandbox PRIVATE d3d12 dxgi)
+    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/pix/WinPixEventRuntime.dll DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    target_include_directories(sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/pix)
 endif()
 
