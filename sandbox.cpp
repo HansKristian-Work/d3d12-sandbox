@@ -504,6 +504,15 @@ static void execute_command_buffer(Context &ctx, unsigned index, const Pipeline 
 				ctx.list->SetGraphicsRoot32BitConstants(1, 3, cmd.frag, 0);
 				ctx.list->DrawIndexedInstanced(cmd.draw.IndexCountPerInstance, cmd.draw.InstanceCount, cmd.draw.StartIndexLocation, cmd.draw.BaseVertexLocation, cmd.draw.StartInstanceLocation);
 			}
+
+			if (params.roundtrip)
+			{
+				D3D12_RESOURCE_BARRIER transition = barrier;
+				std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+				ctx.list->ResourceBarrier(1, &barrier);
+				std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+				ctx.list->ResourceBarrier(1, &barrier);
+			}
 		}
 	}
 
@@ -534,6 +543,13 @@ static void execute_command_buffer(Context &ctx, unsigned index, const Pipeline 
 				ctx.list->SetComputeRootUnorderedAccessView(0, cmd.va);
 				ctx.list->Dispatch(cmd.dispatch.ThreadGroupCountX, cmd.dispatch.ThreadGroupCountY, cmd.dispatch.ThreadGroupCountZ);
 			}
+
+			if (params.roundtrip)
+			{
+				D3D12_RESOURCE_BARRIER uav = {};
+				uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+				ctx.list->ResourceBarrier(1, &uav);
+			}
 		}
 	}
 
@@ -552,7 +568,7 @@ static void render_test(Context &ctx)
 	auto graphics_pipeline = create_graphics_pipeline(ctx);
 	auto compute_pipeline = create_compute_pipeline(ctx);
 
-	constexpr uint32_t MaxCommands = 1024;
+	constexpr uint32_t MaxCommands = 256;
 
 	std::vector<IndirectCommand> gfx_cmd(MaxCommands);
 	std::vector<IndirectDispatchCommand> cs_cmd(MaxCommands);
@@ -567,18 +583,18 @@ static void render_test(Context &ctx)
 	ibv.Format = DXGI_FORMAT_R32_UINT;
 	ibv.SizeInBytes = index_buffer->GetDesc().Width;
 
-	for (uint32_t y = 0; y < 32; y++)
+	for (uint32_t y = 0; y < 16; y++)
 	{
-		for (uint32_t x = 0; x < 32; x++)
+		for (uint32_t x = 0; x < 16; x++)
 		{
-			uint32_t cmd_index = y * 32 + x;
+			uint32_t cmd_index = y * 16 + x;
 			auto &c = gfx_cmd[cmd_index];
 			c.ibv = ibv;
-			c.vert[0] = 2.0f * float(x) / 32.0f - 1.0f;
-			c.vert[1] = 2.0f * float(y) / 32.0f - 1.0f;
-			c.vert[2] = 0.05f;
-			c.frag[0] = float(x) / 32.0f;
-			c.frag[1] = float(y) / 32.0f;
+			c.vert[0] = 2.0f * float(x) / 16.0f - 1.0f;
+			c.vert[1] = 2.0f * float(y) / 16.0f - 1.0f;
+			c.vert[2] = 0.1f;
+			c.frag[0] = float(x) / 16.0f;
+			c.frag[1] = float(y) / 16.0f;
 			c.frag[2] = 0.2f;
 			c.draw.IndexCountPerInstance = 3;
 			c.draw.InstanceCount = 4;
@@ -616,15 +632,14 @@ static void render_test(Context &ctx)
 
 		frame.allocator->Reset();
 
-		constexpr bool DirectPath = false;
+		constexpr bool DirectPath = true;
 		constexpr bool IndirectPath = false;
-		constexpr bool IndirectCountPath = true;
-		constexpr bool EmptyDispatch = false;
-		constexpr bool Roundtrip = true;
+		constexpr bool IndirectCountPath = false;
+		constexpr bool EmptyDispatch = true;
+		constexpr bool Roundtrip = false;
 
 		Params params = {};
-		params.iterations = 32;
-		params.max_commands = 1024;
+		params.max_commands = 256;
 		params.gfx_cmds = gfx_cmd.data();
 		params.cs_cmds = cs_cmd.data();
 		params.ibv = ibv;
@@ -634,15 +649,18 @@ static void render_test(Context &ctx)
 		if (DirectPath)
 		{
 			params.max_commands = 16;
-			params.tag = "Direct - 32 iterations - 16 draws";
+			params.iterations = 256;
+			params.tag = "Direct - 256 iterations - 16 draws";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 
-			params.max_commands = 128;
-			params.tag = "Direct - 32 iterations - 128 draws";
+			params.max_commands = 64;
+			params.iterations = 64;
+			params.tag = "Direct - 64 iterations - 64 draws";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 
-			params.max_commands = 1024;
-			params.tag = "Direct - 32 iterations - 1024 draws";
+			params.max_commands = 256;
+			params.iterations = 16;
+			params.tag = "Direct - 16 iterations - 256 draws";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 		}
 
@@ -653,15 +671,18 @@ static void render_test(Context &ctx)
 		if (IndirectPath)
 		{
 			params.max_commands = 16;
-			params.tag = "Indirect - 32 iterations - 16 / 1024 indirect count";
+			params.iterations = 256;
+			params.tag = "Indirect - 256 iterations - 16 direct count";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 
-			params.max_commands = 128;
-			params.tag = "Indirect - 32 iterations - 128 / 1024 indirect count";
+			params.max_commands = 64;
+			params.iterations = 64;
+			params.tag = "Indirect - 64 iterations - 64 direct count";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 
-			params.max_commands = 1024;
-			params.tag = "Indirect - 32 iterations - 1024 / 1024 indirect count";
+			params.max_commands = 256;
+			params.iterations = 16;
+			params.tag = "Indirect - 16 iterations - 256 direct count";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 		}
 
@@ -672,7 +693,21 @@ static void render_test(Context &ctx)
 		if (IndirectCountPath)
 		{
 			params.indirect_count_offset = 16 * sizeof(uint32_t);
-			params.tag = "Indirect - 32 iterations - 16 / 1024 indirect count";
+			params.iterations = 256;
+			params.tag = "Indirect - 256 iterations - 16 / 256 indirect count";
+			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
+
+			if (EmptyDispatch)
+			{
+				params.indirect_count_offset = 0 * sizeof(uint32_t);
+				params.iterations = 256;
+				params.tag = "Indirect - 256 iterations - 0 / 256 indirect count";
+				execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
+			}
+
+			params.indirect_count_offset = 64 * sizeof(uint32_t);
+			params.iterations = 64;
+			params.tag = "Indirect - 64 iterations - 64 / 256 indirect count";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 
 			if (EmptyDispatch)
@@ -681,24 +716,11 @@ static void render_test(Context &ctx)
 				params.iterations = 256;
 				params.tag = "Indirect - 256 iterations - 0 / 1024 indirect count";
 				execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
-				params.iterations = 32;
 			}
 
-			params.indirect_count_offset = 128 * sizeof(uint32_t);
-			params.tag = "Indirect - 32 iterations - 128 / 1024 indirect count";
-			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
-
-			if (EmptyDispatch)
-			{
-				params.indirect_count_offset = 0 * sizeof(uint32_t);
-				params.iterations = 256;
-				params.tag = "Indirect - 256 iterations - 0 / 1024 indirect count";
-				execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
-				params.iterations = 32;
-			}
-
-			params.indirect_count_offset = 1024 * sizeof(uint32_t);
-			params.tag = "Indirect - 32 iterations - 1024 / 1024 indirect count";
+			params.iterations = 16;
+			params.indirect_count_offset = 256 * sizeof(uint32_t);
+			params.tag = "Indirect - 16 iterations - 256 / 256 indirect count";
 			execute_command_buffer(ctx, backbuffer, graphics_pipeline, compute_pipeline, params);
 		}
 
