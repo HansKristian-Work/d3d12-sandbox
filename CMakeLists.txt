@@ -38,3 +38,7 @@ if (WIN32)
     target_include_directories(sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/pix)
 endif()
 
+if (WIN32 AND CMAKE_COMPILER_IS_GNUCXX)
+    target_link_libraries(sandbox PRIVATE -static gcc stdc++ winpthread)
+    target_include_directories(sandbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vkd3d-headers)
+endif()

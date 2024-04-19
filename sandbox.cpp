@@ -1,7 +1,13 @@
 #include "SDL3/SDL.h"
 
+#ifdef _MSC_VER
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#else
+#include "vkd3d-headers/vkd3d_d3d12.h"
+#include "vkd3d-headers/vkd3d_dxgi1_5.h"
+#endif
+
 #include <wrl.h>
 #include <stdio.h>
 #include <memory>
