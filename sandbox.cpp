@@ -76,9 +76,9 @@ bool Context::init()
 	HMODULE pix = LoadLibraryA("WinPixEventRuntime.dll");
 	if (pix)
 	{
-		pixBeginEventOnCommandList = (BeginEventOnCommandList)GetProcAddress(pix, "PIXBeginEventOnCommandList");
-		pixEndEventOnCommandList = (EndEventOnCommandList)GetProcAddress(pix, "PIXEndEventOnCommandList");
-		pixSetMarkerOnCommandList = (SetMarkerOnCommandList)GetProcAddress(pix, "PIXSetMarkerOnCommandList");
+		pixBeginEventOnCommandList = (BeginEventOnCommandList)(void *)GetProcAddress(pix, "PIXBeginEventOnCommandList");
+		pixEndEventOnCommandList = (EndEventOnCommandList)(void *)GetProcAddress(pix, "PIXEndEventOnCommandList");
+		pixSetMarkerOnCommandList = (SetMarkerOnCommandList)(void *)GetProcAddress(pix, "PIXSetMarkerOnCommandList");
 	}
 
 	window.reset(SDL_CreateWindow("D3D12 sandbox", 1280, 720, 0));
@@ -508,9 +508,9 @@ static void execute_command_buffer(Context &ctx, unsigned index, const Pipeline 
 			if (params.roundtrip)
 			{
 				D3D12_RESOURCE_BARRIER transition = barrier;
-				std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+				std::swap(barrier.Transition.StateBefore, transition.Transition.StateAfter);
 				ctx.list->ResourceBarrier(1, &barrier);
-				std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+				std::swap(barrier.Transition.StateBefore, transition.Transition.StateAfter);
 				ctx.list->ResourceBarrier(1, &barrier);
 			}
 		}
@@ -632,11 +632,11 @@ static void render_test(Context &ctx)
 
 		frame.allocator->Reset();
 
-		constexpr bool DirectPath = true;
+		constexpr bool DirectPath = false;
 		constexpr bool IndirectPath = false;
-		constexpr bool IndirectCountPath = false;
+		constexpr bool IndirectCountPath = true;
 		constexpr bool EmptyDispatch = true;
-		constexpr bool Roundtrip = false;
+		constexpr bool Roundtrip = true;
 
 		Params params = {};
 		params.max_commands = 256;
