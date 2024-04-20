@@ -657,6 +657,7 @@ static void execute_command_buffer(Context &ctx, unsigned index, const Pipeline 
 			}
 			else
 			{
+				// Pathologically slow on NVIDIA vkd3d-proton. Should be disabled.
 				ctx.list->ExecuteIndirect(cs_pipeline.ei_signature.Get(), params.max_commands, params.cs_arguments, 0, params.indirect_count, params.indirect_count_offset);
 			}
 
