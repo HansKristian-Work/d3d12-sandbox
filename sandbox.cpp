@@ -777,8 +777,8 @@ static void render_test(Context &ctx)
 				double gfx_time = double(gfx_ticks) / double(ctx.timestamp_frequency);
 				double cs_time = double(cs_ticks) / double(ctx.timestamp_frequency);
 
-				ctx.gfx_accum_time_buffer[i] = 0.99 * ctx.gfx_accum_time_buffer[i] + 0.01 * gfx_time;
-				ctx.cs_accum_time_buffer[i] = 0.99 * ctx.cs_accum_time_buffer[i] + 0.01 * cs_time;
+				ctx.gfx_accum_time_buffer[i] = 0.95 * ctx.gfx_accum_time_buffer[i] + 0.05 * gfx_time;
+				ctx.cs_accum_time_buffer[i] = 0.95 * ctx.cs_accum_time_buffer[i] + 0.05 * cs_time;
 
 				printf("   Avg Graphics: %.3f ms\n", 1e3 * ctx.gfx_accum_time_buffer[i]);
 				printf("   Avg Compute:  %.3f ms\n", 1e3 * ctx.cs_accum_time_buffer[i]);
@@ -796,7 +796,7 @@ static void render_test(Context &ctx)
 		constexpr bool Roundtrip = false;
 
 		Params params = {};
-		params.max_commands = 256;
+		params.max_commands = MaxCommands;
 		params.gfx_cmds = gfx_cmd.data();
 		params.cs_cmds = cs_cmd.data();
 		params.ibv = ibv;
